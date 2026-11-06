@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#F6E4E4"/>
+  <!-- orejas -->
+  <path d="M138 214 L168 106 L238 176 Z" fill="#141414"/>
+  <path d="M374 214 L344 106 L274 176 Z" fill="#141414"/>
+  <path d="M164 186 L178 136 L212 170 Z" fill="#E7A9B0"/>
+  <path d="M348 186 L334 136 L300 170 Z" fill="#E7A9B0"/>
+  <!-- cabeza -->
+  <ellipse cx="256" cy="282" rx="138" ry="118" fill="#141414"/>
+  <!-- ojos -->
+  <ellipse cx="206" cy="270" rx="16" ry="22" fill="#F6E4E4"/>
+  <ellipse cx="306" cy="270" rx="16" ry="22" fill="#F6E4E4"/>
+  <!-- nariz -->
+  <path d="M244 314 L268 314 L256 328 Z" fill="#E7A9B0"/>
+  <!-- percha -->
+  <path d="M256 400 v18 M196 448 L256 418 L316 448" stroke="#141414" stroke-width="12" stroke-linecap="round" fill="none"/>
+</svg>
