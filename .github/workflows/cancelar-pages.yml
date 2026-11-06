@@ -1,0 +1,19 @@
+name: Cancelar publicación trabada
+
+on:
+  workflow_dispatch:
+    inputs:
+      id:
+        description: ID de la publicación de Pages trabada
+        required: true
+
+permissions:
+  pages: write
+
+jobs:
+  cancelar:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh api -X POST "repos/${{ github.repository }}/pages/deployments/${{ inputs.id }}/cancel" || true
+        env:
+          GH_TOKEN: ${{ github.token }}
