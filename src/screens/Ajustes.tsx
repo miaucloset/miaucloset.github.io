@@ -113,7 +113,7 @@ export default function Ajustes({ volver }: { volver: () => void }) {
                 <input
                   value={llave}
                   onChange={(e) => setLlave(e.target.value)}
-                  placeholder="AIza…"
+                  placeholder="Tu llave"
                   className="flex-1 h-12 rounded-2xl border-2 border-rosa-200 px-4 bg-rosa-50 text-sm min-w-0"
                   autoCapitalize="off"
                   autoCorrect="off"

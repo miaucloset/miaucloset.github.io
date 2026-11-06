@@ -56,7 +56,8 @@ export const modeloImagen = () => leerAjuste<string>('modeloImagen', 'gemini-2.5
 /** Verifica la llave y deja elegidos los mejores modelos disponibles. */
 export async function probarLlave(llave: string): Promise<{ ok: boolean; error?: string }> {
   const limpia = llave.trim()
-  if (!/^AIza[\w-]{30,}$/.test(limpia)) return { ok: false, error: 'Eso no parece una llave de Google (empieza con "AIza").' }
+  // Formatos de Google: "AIza…" (antiguo) y "AQ.…" (nuevo). Aceptamos cualquier llave sin espacios.
+  if (!/^[A-Za-z0-9._\-]{25,}$/.test(limpia)) return { ok: false, error: 'Eso no parece una llave. Cópiala de nuevo con el botón "Copiar clave".' }
   try {
     const c = new GoogleGenAI({ apiKey: limpia })
     const modelos = await detectarModelos(c).catch(() => null)

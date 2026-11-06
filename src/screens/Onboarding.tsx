@@ -130,7 +130,7 @@ export default function Onboarding({ alTerminar }: { alTerminar: () => void }) {
               <input
                 value={manual}
                 onChange={(e) => setManual(e.target.value)}
-                placeholder="Pega aquí tu llave (AIza…)"
+                placeholder="Pega aquí tu llave"
                 className="w-full rounded-2xl border-2 border-rosa-200 px-4 py-3 bg-rosa-50"
                 autoCapitalize="off"
                 autoCorrect="off"
