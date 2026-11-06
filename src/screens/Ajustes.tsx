@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Boton, Tarjeta, Titulo, Aviso, Pantalla, Volver } from '../components/ui'
-import { avisar } from '../components/comunes'
+import { avisar, DetalleTecnico } from '../components/comunes'
 import { obtenerLlave, guardarLlave, probarLlave, modeloTexto, modeloImagen, usoImagenes, COSTO_IMAGEN_USD } from '../lib/gemini'
 import { googleDisponible, entrarConGoogle, salirDeGoogle, guardarConfigNube, type UsuarioGoogle } from '../lib/google'
 import { sincronizar, exportarRespaldo, importarRespaldo } from '../lib/sync'
@@ -12,7 +12,7 @@ import { TEMAS, leerTema, aplicarTema } from '../lib/tema'
 export default function Ajustes({ volver }: { volver: () => void }) {
   const [llave, setLlave] = useState('')
   const [editarLlave, setEditarLlave] = useState(false)
-  const [estado, setEstado] = useState<{ tipo: 'ok' | 'error' | 'info'; texto: string } | null>(null)
+  const [estado, setEstado] = useState<{ tipo: 'ok' | 'error' | 'info'; texto: string; detalle?: string } | null>(null)
   const [usuario, setUsuario] = useState<UsuarioGoogle | null>(null)
   const [probador, setProbador] = useState(true)
   const [tope, setTope] = useState(4)
@@ -37,14 +37,14 @@ export default function Ajustes({ volver }: { volver: () => void }) {
 
   async function probar() {
     setEstado({ tipo: 'info', texto: 'Probando…' })
-    const r = await probarLlave(llave)
+    const r = await probarLlave(llave, (t) => setEstado({ tipo: 'info', texto: t }))
     if (r.ok) {
       await guardarLlave(llave)
       if (usuario) await guardarConfigNube({ llaveIa: llave.trim() }).catch(() => undefined)
       setEstado({ tipo: 'ok', texto: 'Conectada ✅' })
       setEditarLlave(false)
       setModelos([await modeloTexto(), await modeloImagen()])
-    } else setEstado({ tipo: 'error', texto: r.error ?? 'No funcionó' })
+    } else setEstado({ tipo: 'error', texto: r.error ?? 'No funcionó', detalle: r.detalle })
   }
 
   async function pegar() {
@@ -133,6 +133,7 @@ export default function Ajustes({ volver }: { volver: () => void }) {
             </>
           )}
           {estado && <Aviso tipo={estado.tipo}>{estado.texto}</Aviso>}
+          {estado?.detalle && <DetalleTecnico texto={estado.detalle} />}
         </Tarjeta>
 
         {/* Google + Sync */}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Boton, Tarjeta, Aviso, Pantalla } from '../components/ui'
+import { DetalleTecnico } from '../components/comunes'
 import { entrarConGoogle, googleDisponible, leerConfigNube, guardarConfigNube, type UsuarioGoogle } from '../lib/google'
 import { guardarLlave, probarLlave } from '../lib/gemini'
 import { guardarAjuste } from '../db'
@@ -18,6 +19,8 @@ export default function Onboarding({ alTerminar }: { alTerminar: () => void }) {
   const [volvio, setVolvio] = useState(false)
   const [manual, setManual] = useState('')
   const [verManual, setVerManual] = useState(false)
+  const [avance, setAvance] = useState('')
+  const [detalle, setDetalle] = useState('')
 
   // Detecta que regresó de AI Studio para resaltar el botón Pegar
   useEffect(() => {
@@ -52,9 +55,12 @@ export default function Onboarding({ alTerminar }: { alTerminar: () => void }) {
   async function conectar(llave: string) {
     setOcupado(true)
     setError('')
-    const r = await probarLlave(llave)
+    setDetalle('')
+    const r = await probarLlave(llave, setAvance)
+    setAvance('')
     if (!r.ok) {
       setError(r.error ?? 'No funcionó.')
+      setDetalle(r.detalle ?? '')
       setOcupado(false)
       return
     }
@@ -123,7 +129,7 @@ export default function Onboarding({ alTerminar }: { alTerminar: () => void }) {
             Obtener Mi Llave
           </Boton>
           <Boton variante={volvio ? 'principal' : 'suave'} icono="📋" onClick={pegar} disabled={ocupado}>
-            {ocupado ? 'Verificando…' : 'Pegar Mi Llave'}
+            {ocupado ? avance || 'Verificando…' : 'Pegar Mi Llave'}
           </Boton>
           {verManual && (
             <div className="space-y-2">
@@ -141,6 +147,7 @@ export default function Onboarding({ alTerminar }: { alTerminar: () => void }) {
             </div>
           )}
           {error && <Aviso tipo="error">{error}</Aviso>}
+          {detalle && <DetalleTecnico texto={detalle} />}
           <p className="text-xs text-neutral-400">
             Tu llave se guarda solo en este dispositivo{usuario ? ' y en una carpeta oculta de tu Google Drive' : ''}. Nadie más la ve.
           </p>

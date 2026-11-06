@@ -15,11 +15,15 @@ export async function guardarLlave(llave: string) {
   cliente = null
 }
 
+/** Cliente sin reintentos internos (los controla enCola) y con tiempo máximo por solicitud. */
+const crearCliente = (apiKey: string, timeout = 90_000) =>
+  new GoogleGenAI({ apiKey, httpOptions: { timeout, retryOptions: { attempts: 1 } } })
+
 async function ia(): Promise<GoogleGenAI> {
   const llave = await obtenerLlave()
   if (!llave) throw new Error('SIN_LLAVE')
   if (!cliente || llaveCliente !== llave) {
-    cliente = new GoogleGenAI({ apiKey: llave })
+    cliente = crearCliente(llave)
     llaveCliente = llave
   }
   return cliente
@@ -27,54 +31,90 @@ async function ia(): Promise<GoogleGenAI> {
 
 /* ---------- Elección automática de modelos (Google cambia nombres seguido) ---------- */
 
-function elegirModelos(nombres: string[]) {
+const MODELOS_RESPALDO = ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']
+
+function ordenarModelos(nombres: string[]) {
   const n = nombres.map((x) => x.replace(/^models\//, ''))
-  const texto =
-    n.find((x) => x === 'gemini-flash-latest') ??
-    n.filter((x) => /^gemini-[\d.]+-flash$/.test(x)).sort().reverse()[0] ??
-    n.find((x) => x.includes('flash') && !/image|tts|live|audio|lite|embed/.test(x)) ??
-    'gemini-flash-latest'
+  const version = (x: string) => Number(x.match(/gemini-(\d+(?:\.\d+)?)/)?.[1] ?? 0)
+  const esTexto = (x: string) => x.startsWith('gemini') && x.includes('flash') && !/image|tts|live|audio|embed|exp|thinking|preview|computer/.test(x)
+  const texto = [
+    ...n.filter((x) => x === 'gemini-flash-latest' || x === 'gemini-flash-lite-latest'),
+    ...n.filter((x) => esTexto(x) && !x.includes('latest') && !x.includes('lite')).sort((a, b) => version(b) - version(a)),
+    ...n.filter((x) => esTexto(x) && !x.includes('latest') && x.includes('lite')).sort((a, b) => version(b) - version(a)),
+  ]
   const imagen =
-    n.filter((x) => /flash.*image|nano-banana/.test(x) && !/preview/.test(x)).sort().reverse()[0] ??
-    n.filter((x) => /image/.test(x) && x.startsWith('gemini')).sort().reverse()[0] ??
+    n.filter((x) => /flash.*image|nano-banana/.test(x) && !/preview/.test(x)).sort((a, b) => version(b) - version(a))[0] ??
+    n.filter((x) => /image/.test(x) && x.startsWith('gemini')).sort((a, b) => version(b) - version(a))[0] ??
     'gemini-2.5-flash-image'
-  return { texto, imagen }
+  return { texto: [...new Set([...texto, ...MODELOS_RESPALDO])], imagen }
 }
 
-async function detectarModelos(c: GoogleGenAI) {
+async function listarModelos(c: GoogleGenAI): Promise<string[]> {
   const nombres: string[] = []
-  const pager = await c.models.list({ config: { pageSize: 200 } })
+  const pager = await c.models.list({ config: { pageSize: 100 } })
   for await (const m of pager) {
     if (m.name && (m.supportedActions ?? ['generateContent']).includes('generateContent')) nombres.push(m.name)
+    if (nombres.length >= 150) break
   }
-  return elegirModelos(nombres)
+  return nombres
 }
+
+const conTiempo = <T,>(p: Promise<T>, ms: number) =>
+  Promise.race([p, new Promise<never>((_, mal) => setTimeout(() => mal(new Error('TIEMPO_AGOTADO')), ms))])
 
 export const modeloTexto = () => leerAjuste<string>('modeloTexto', 'gemini-flash-latest')
 export const modeloImagen = () => leerAjuste<string>('modeloImagen', 'gemini-2.5-flash-image')
 
-/** Verifica la llave y deja elegidos los mejores modelos disponibles. */
-export async function probarLlave(llave: string): Promise<{ ok: boolean; error?: string }> {
-  const limpia = llave.trim()
+export interface ResultadoLlave {
+  ok: boolean
+  error?: string
+  detalle?: string
+}
+
+/** Verifica la llave (máx. ~20 s por intento) y deja elegido el primer modelo que responde. */
+export async function probarLlave(llave: string, avance?: (t: string) => void): Promise<ResultadoLlave> {
+  const limpia = llave.trim().replace(/^["']|["']$/g, '')
   // Formatos de Google: "AIza…" (antiguo) y "AQ.…" (nuevo). Aceptamos cualquier llave sin espacios.
   if (!/^[A-Za-z0-9._\-]{25,}$/.test(limpia)) return { ok: false, error: 'Eso no parece una llave. Cópiala de nuevo con el botón "Copiar clave".' }
+  const c = crearCliente(limpia, 20_000)
+
+  avance?.('Conectando con Google…')
+  let candidatos = MODELOS_RESPALDO
+  let imagen = 'gemini-2.5-flash-image'
   try {
-    const c = new GoogleGenAI({ apiKey: limpia })
-    const modelos = await detectarModelos(c).catch(() => null)
-    if (modelos) {
-      await guardarAjuste('modeloTexto', modelos.texto)
-      await guardarAjuste('modeloImagen', modelos.imagen)
-    }
-    const r = await c.models.generateContent({ model: await modeloTexto(), contents: 'Responde solo: ok' })
-    return r.text ? { ok: true } : { ok: false, error: 'La IA no respondió.' }
+    const orden = ordenarModelos(await conTiempo(listarModelos(c), 20_000))
+    candidatos = orden.texto
+    imagen = orden.imagen
   } catch (e) {
-    return { ok: false, error: traducirError(e) }
+    const m = mensaje(e)
+    if (/API_KEY_INVALID|API key not valid|UNAUTHENTICATED|401|PERMISSION_DENIED|403/i.test(m)) return { ok: false, error: traducirError(e), detalle: m }
   }
+
+  let ultimo: unknown = null
+  for (const [i, modelo] of candidatos.slice(0, 4).entries()) {
+    avance?.(`Probando la IA… ${i + 1}/4`)
+    try {
+      const r = await conTiempo(c.models.generateContent({ model: modelo, contents: 'Responde solo: ok' }), 20_000)
+      if (r.text) {
+        await guardarAjuste('modeloTexto', modelo)
+        await guardarAjuste('modeloImagen', imagen)
+        return { ok: true }
+      }
+    } catch (e) {
+      ultimo = e
+      if (/API_KEY_INVALID|API key not valid|UNAUTHENTICATED|PERMISSION_DENIED|TIEMPO_AGOTADO|Failed to fetch|Load failed/i.test(mensaje(e))) break
+    }
+  }
+  return { ok: false, error: traducirError(ultimo), detalle: mensaje(ultimo).slice(0, 600) }
 }
+
+const mensaje = (e: unknown) => String((e as Error)?.message ?? e ?? '')
 
 export function traducirError(e: unknown): string {
   const m = String((e as Error)?.message ?? e)
   if (m.includes('SIN_LLAVE')) return 'Conecta tu IA en Ajustes.'
+  if (m.includes('TIEMPO_AGOTADO') || /timed? ?out|aborted/i.test(m)) return 'Google tardó demasiado en responder. Revisa tu internet e intenta otra vez.'
+  if (/UNAUTHENTICATED|401/.test(m)) return 'Google no reconoce esta llave. Créala de nuevo en AI Studio.'
   if (m.includes('TOPE_DIARIO')) return 'Llegaste al tope de imágenes de hoy.'
   if (m.includes('API_KEY_INVALID') || m.includes('API key not valid')) return 'La llave no es válida. Cópiala de nuevo.'
   if (/billing|FAILED_PRECONDITION|free tier|limit: 0/i.test(m)) return 'Esta función necesita facturación activa en tu cuenta de Google.'

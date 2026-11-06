@@ -306,3 +306,24 @@ export function BotonArchivo({
 export function usePrendas(ids: string[]) {
   return useLiveQuery(async () => (await db.prendas.bulkGet(ids)).filter((p): p is Prenda => Boolean(p)), [ids.join(',')], [])
 }
+
+/* ---------- Detalle técnico de un error (para copiar y enviar) ---------- */
+export function DetalleTecnico({ texto }: { texto: string }) {
+  const [abierto, setAbierto] = useState(false)
+  return (
+    <div className="text-xs">
+      <div className="flex gap-2">
+        <button onClick={() => setAbierto(!abierto)} className="flex-1 h-10 rounded-xl bg-rosa-100 font-semibold">
+          {abierto ? 'Ocultar Detalle' : 'Ver Detalle'}
+        </button>
+        <button
+          onClick={async () => (await navigator.clipboard?.writeText(texto).catch(() => undefined), avisar('📋 Detalle copiado'))}
+          className="flex-1 h-10 rounded-xl bg-rosa-100 font-semibold"
+        >
+          📋 Copiar Detalle
+        </button>
+      </div>
+      {abierto && <pre className="mt-2 p-3 rounded-xl bg-white border border-rosa-100 whitespace-pre-wrap break-all text-neutral-600">{texto}</pre>}
+    </div>
+  )
+}
