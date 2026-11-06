@@ -1,4 +1,4 @@
-name: Publicar en rama gh-pages (plan B)
+name: Publicar en GitHub Pages (rama gh-pages)
 
 on:
   push:

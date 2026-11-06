@@ -71,41 +71,62 @@ export interface ResultadoLlave {
   detalle?: string
 }
 
-/** Verifica la llave (máx. ~20 s por intento) y deja elegido el primer modelo que responde. */
+/** Verifica la llave: prueba primero modelos rápidos, registra cada paso y elige el mejor modelo disponible. */
 export async function probarLlave(llave: string, avance?: (t: string) => void): Promise<ResultadoLlave> {
   const limpia = llave.trim().replace(/^["']|["']$/g, '')
   // Formatos de Google: "AIza…" (antiguo) y "AQ.…" (nuevo). Aceptamos cualquier llave sin espacios.
   if (!/^[A-Za-z0-9._\-]{25,}$/.test(limpia)) return { ok: false, error: 'Eso no parece una llave. Cópiala de nuevo con el botón "Copiar clave".' }
-  const c = crearCliente(limpia, 20_000)
+  const c = crearCliente(limpia, 30_000)
+  const registro: string[] = [`llave: ${limpia.slice(0, 4)}…${limpia.slice(-4)} (${limpia.length} caracteres)`]
+  const t0 = () => performance.now()
+  const seg = (t: number) => ((performance.now() - t) / 1000).toFixed(1) + 's'
 
   avance?.('Conectando con Google…')
-  let candidatos = MODELOS_RESPALDO
-  let imagen = 'gemini-2.5-flash-image'
+  let orden = { texto: MODELOS_RESPALDO, imagen: 'gemini-2.5-flash-image' }
+  let listados = false
+  const tl = t0()
   try {
-    const orden = ordenarModelos(await conTiempo(listarModelos(c), 20_000))
-    candidatos = orden.texto
-    imagen = orden.imagen
+    const nombres = await conTiempo(listarModelos(c), 25_000)
+    orden = ordenarModelos(nombres)
+    listados = true
+    registro.push(`listar modelos: ok ${seg(tl)} (${nombres.length})`)
   } catch (e) {
-    const m = mensaje(e)
-    if (/API_KEY_INVALID|API key not valid|UNAUTHENTICATED|401|PERMISSION_DENIED|403/i.test(m)) return { ok: false, error: traducirError(e), detalle: m }
-  }
-
-  let ultimo: unknown = null
-  for (const [i, modelo] of candidatos.slice(0, 4).entries()) {
-    avance?.(`Probando la IA… ${i + 1}/4`)
-    try {
-      const r = await conTiempo(c.models.generateContent({ model: modelo, contents: 'Responde solo: ok' }), 20_000)
-      if (r.text) {
-        await guardarAjuste('modeloTexto', modelo)
-        await guardarAjuste('modeloImagen', imagen)
-        return { ok: true }
-      }
-    } catch (e) {
-      ultimo = e
-      if (/API_KEY_INVALID|API key not valid|UNAUTHENTICATED|PERMISSION_DENIED|TIEMPO_AGOTADO|Failed to fetch|Load failed/i.test(mensaje(e))) break
+    registro.push(`listar modelos: ${mensaje(e).slice(0, 160)} ${seg(tl)}`)
+    if (/API_KEY_INVALID|API key not valid|UNAUTHENTICATED|401|PERMISSION_DENIED|403/i.test(mensaje(e))) {
+      return { ok: false, error: traducirError(e), detalle: registro.join('\n') }
     }
   }
-  return { ok: false, error: traducirError(ultimo), detalle: mensaje(ultimo).slice(0, 600) }
+
+  // Para validar: primero los livianos (responden más rápido), luego los normales
+  const livianos = orden.texto.filter((m) => m.includes('lite'))
+  const normales = orden.texto.filter((m) => !m.includes('lite'))
+  const prueba = [...livianos.slice(0, 2), ...normales.slice(0, 2)]
+
+  let ultimo: unknown = null
+  let funciona = ''
+  for (const [i, modelo] of prueba.entries()) {
+    avance?.(`Probando la IA… ${i + 1}/${prueba.length}`)
+    const t = t0()
+    try {
+      await conTiempo(c.models.generateContent({ model: modelo, contents: 'Responde solo: ok', config: { maxOutputTokens: 256 } }), 30_000)
+      registro.push(`${modelo}: ok ${seg(t)}`)
+      funciona = modelo
+      break
+    } catch (e) {
+      ultimo = e
+      registro.push(`${modelo}: ${mensaje(e).slice(0, 160)} ${seg(t)}`)
+      if (/API_KEY_INVALID|API key not valid|UNAUTHENTICATED|PERMISSION_DENIED|Failed to fetch|Load failed/i.test(mensaje(e))) break
+    }
+  }
+
+  if (!funciona) return { ok: false, error: traducirError(ultimo), detalle: registro.join('\n') }
+
+  // Modelo principal: el mejor "flash" listado; respaldo: el liviano que respondió
+  const principal = listados ? (normales[0] ?? funciona) : funciona
+  await guardarAjuste('modeloTexto', principal)
+  await guardarAjuste('modeloRespaldo', funciona.includes('lite') ? funciona : (livianos[0] ?? funciona))
+  await guardarAjuste('modeloImagen', orden.imagen)
+  return { ok: true, detalle: registro.join('\n') }
 }
 
 const mensaje = (e: unknown) => String((e as Error)?.message ?? e ?? '')
@@ -162,11 +183,17 @@ async function partes(texto: string, imagenes: Blob[] = []): Promise<Parte[]> {
 export async function preguntarJson<T>(opts: { instruccion: string; texto: string; imagenes?: Blob[] }): Promise<T> {
   return enCola(async () => {
     const c = await ia()
-    const r = await c.models.generateContent({
-      model: await modeloTexto(),
-      contents: [{ role: 'user', parts: await partes(opts.texto, opts.imagenes) }],
-      config: { systemInstruction: opts.instruccion, responseMimeType: 'application/json', temperature: 0.7 },
-    })
+    const contenido = [{ role: 'user', parts: await partes(opts.texto, opts.imagenes) }]
+    const config = { systemInstruction: opts.instruccion, responseMimeType: 'application/json', temperature: 0.7 }
+    let r
+    try {
+      r = await c.models.generateContent({ model: await modeloTexto(), contents: contenido, config })
+    } catch (e) {
+      const respaldo = await leerAjuste<string>('modeloRespaldo', '')
+      const saturado = /503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED|timed? ?out|aborted/i.test(mensaje(e))
+      if (!saturado || !respaldo || respaldo === (await modeloTexto())) throw e
+      r = await c.models.generateContent({ model: respaldo, contents: contenido, config })
+    }
     const t = (r.text ?? '{}').replace(/^```json\s*|```$/g, '')
     return JSON.parse(t) as T
   })
